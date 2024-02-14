@@ -2,13 +2,10 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
-	"crypto/x509"
-	"encoding/pem"
+	"crypto/tls"
 	"fmt"
+	"net"
 	"os"
-	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -50,41 +47,18 @@ var certCheckerCmd = &cobra.Command{
 }
 
 func getExpirationDate(url string) (time.Time, error) {
-	cmd := exec.Command("openssl", "s_client", "-connect", url+":443", "-servername", url, "-showcerts")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	err := cmd.Run()
+	conn, err := tls.Dial("tcp", net.JoinHostPort(url, "443"), nil)
 	if err != nil {
 		return time.Time{}, err
 	}
+	defer conn.Close()
 
-	certInfo := out.String()
-	certStart := strings.Index(certInfo, "-----BEGIN CERTIFICATE-----")
-	certEnd := strings.Index(certInfo, "-----END CERTIFICATE-----")
-	if certStart == -1 || certEnd == -1 {
-		return time.Time{}, fmt.Errorf("certificate not found in output")
-	}
-	certPEM := certInfo[certStart : certEnd+len("-----END CERTIFICATE-----")]
-
-	// Parse certificate PEM and extract expiration date
-	cert, err := parseCertificatePEM(certPEM)
-	if err != nil {
-		return time.Time{}, err
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return time.Time{}, fmt.Errorf("no certificates found for URL: %s", url)
 	}
 
-	return cert.NotAfter, nil
-}
-
-func parseCertificatePEM(certPEM string) (*x509.Certificate, error) {
-	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil {
-		return nil, fmt.Errorf("failed to parse certificate PEM")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	return cert, nil
+	return certs[0].NotAfter, nil
 }
 
 func init() {
